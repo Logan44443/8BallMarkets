@@ -2,6 +2,8 @@ Team Name: 8Ball Markets
 
 Team Members: Logan Azizzadeh, Lukas Horvat, Dylan Cohen, Carlos Penzini, Alain Fornes, Leonardo Lanfranchi
 
+Github link: https://github.com/Logan44443/8BallMarkets 
+
 Progress: Since the last milestone, as a team we updated our proposal, increasing the amount
 of work for each person. We divided into different "Gurus" and each one is a part of the 
 backend tech stack, and all them them work together to create the entire backend. Additionally,
