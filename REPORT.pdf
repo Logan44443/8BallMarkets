@@ -1,0 +1,230 @@
+Proposal
+
+Our project is a peer-to-peer betting platform that lets users create, accept, and arbitrate wagers in a transparent and secure way. The goal is to build a system that gives users full control over their bets while maintaining fairness and accountability through a relational database that tracks every account, transaction, and bet. The focus is on designing a scalable schema that protects user balances, records results accurately, and enforces consistency across all interactions.
+
+The platform runs on a three-role workflow. A proposer creates a wager by setting odds and committing funds. An acceptor takes the other side, and an arbiter verifies fairness and later records the outcome. These roles are linked through foreign keys so the same user can participate in multiple bets in different ways. Once a bet is accepted, both users’ balances are placed in escrow until the result is confirmed. Settlement then updates each balance and logs a permanent transaction record for both sides.
+
+Each user has an account with a unique ID, username, and email, along with optional profile fields like display name, picture, and location. Every user also has a wallet balance that updates with deposits, withdrawals, wagers, and payouts. Each balance change creates a new record in a Transactions table that stores the amount, type, and timestamp. All balance updates happen atomically so there are no partial or inconsistent changes. Withdrawals that would cause a negative balance are rejected, and every transaction stays linked to its user and related bet for clear tracking.
+
+Users can see a full history of their proposed, accepted, and arbitrated bets along with their financial transactions. A reputation system tracks reliability by assigning points for completed bets and deducting points for abandoned or disputed ones. These updates are stored in a Reputation table with reason codes and timestamps so users can see how their score changes over time. Reputation affects trust and ranking across the platform, giving consistent and active users more visibility.
+
+Social features keep users engaged. People can add friends, join betting circles, and appear on leaderboards based on winnings, streaks, or total volume. Head-to-head stats show win rates and profit or loss between friends. Planned features include team betting, where groups can pool wagers and split payouts, and optional social media sharing for highlights and major wins.
+
+Each bet also has a discussion thread for communication between participants. Threads can be private or public, depending on permissions, and support reactions, mentions, edits, and pagination for a clean chat experience. All conversations are stored in the database and tied to the related bet for recordkeeping.
+
+A built-in customer support system manages disputes and technical issues. Users can open tickets linked to bets, message support staff, and track progress. Admins can assign tickets, leave notes, and handle actions like refunds or adjustments. All of these updates are logged and connected to both transaction and reputation data for full transparency.
+
+Together, these components form a complete peer-to-peer betting ecosystem that blends financial integrity, social interaction, and clear recordkeeping. The database design ensures that every action, from creating a bet to resolving a dispute, is traceable, consistent, and secure.
+
+Competitors
+Regarding competition, below is a list of some of our competitors.
+
+Kalshi
+Polymarket
+Manifold Markets
+Metaculus
+Kutt
+ProphetX
+
+
+Prediction Markets/Event Trading
+P2P Social Betting
+Kalshi
+Polymarket
+Manifold Markets
+Kutt
+ProphetX
+
+
+
+
+There are other companies that have slightly similar ideas, but their main focus is on decentralization. We have all 3 aspects of that, which is something that the platforms with prediction and P2P don’t have; there are no primary overhead books, and the focus on our P2P platform gives us decentralization. 
+Task Division
+
+Given our objectives, we have separated our workflow into six equally weighted parts:
+
+User Guru
+
+Every participant in the betting platform—whether they are proposing wagers, accepting them, or acting as arbiters—must have a secure, persistent account in the database. Each account is uniquely identified by a user ID (primary key) and stores critical profile and system-related information.
+
+Account Information
+Identifiers: Each user has a unique ID, username, and email. Email must be unique across the system
+Profile Data: Optional details (such as display name, profile picture, or location) can personalize the social experience.
+
+Wallet & Balance Management
+Wallet Balance: A numerical field tracks the user’s available funds. All wagers, deposits, payouts, and refunds directly update this balance.
+Transactions: Every balance change is logged in the Transactions table, tied back to both the user and a specific bet when applicable. This ensures auditability and transparency.
+Deposits/Withdrawals: While the initial project doesn’t require real-world payment integration, the schema allows for simulated deposits and withdrawals that keep the internal ledger consistent.
+
+Roles in Bets
+Proposer: The user who creates a line, sets the odds, and commits funds.
+Acceptor: The user who agrees to take the other side of the wager, committing equal or proportionate funds.
+Arbiter: The user who reviews the bet for clarity/fairness and later records the outcome.
+ A single account can act in any or all of these roles across different bets, and these relationships are enforced through foreign keys in the Bets table.
+
+History & Visibility
+Betting History: Users can query their own complete history of proposed, accepted, and arbitrated bets. Each entry includes event details, amounts, outcomes, and counterparties.
+Transaction History: A chronological ledger of deposits, wagers, payouts, and refunds is accessible to each user.
+Public Profile: To foster transparency, a pared-down public view shows username, reputation, and a summary of betting activity—helpful for others deciding whether to trust them as a bettor or arbiter.
+
+
+Additional Features (Future Extensions)
+Gamification: Leaderboards based on reputation, bet volume, or arbitration accuracy.
+Two-Factor-Authitication
+Reputation System
+Score Tracking: Each user carries a reputation score that updates based on activity and reliability.
+Logs: Changes are tracked in the Reputation Logs table, showing whether the user gained or lost points, the reason (e.g., fulfilled arbiter duty, abandoned bet, disputed outcome), and a timestamp.
+
+
+
+Transactions Guru
+
+This section handles all money-like activity in the app. Each user has a balance, and every change to that balance is logged in a separate transaction record. When users place, accept, or settle bets, the system updates both parties’ balances together inside a single database transaction so nothing is left half-finished. Withdrawals that would push a balance negative are rejected, and every update is tracked for history. Users can view their full transaction history, and admins can audit balances if needed.
+
+Basic Features
+Users have an account balance that updates automatically after each order or bet.
+Every deposit, withdrawal, and bet settlement creates a new transaction entry with amount, type, and timestamp.
+All updates run atomically using SQL transactions so balances always stay consistent.
+Users can view their transaction history, sorted by date.
+The system prevents double-spending and negative balances.
+
+Bonus Features
+Expired or canceled bets automatically refund held amounts.
+Admins can run a balance check to flag inconsistencies or negative totals.
+
+
+
+Direct Bets Guru
+
+This section manages all one-on-one wagers between two users. Each bet is a structured agreement connecting a proposer and an acceptor, with optional involvement from an arbiter to verify fairness and record outcomes. The system ensures that both users commit funds simultaneously and that results update wallets automatically when the bet is settled. All bet activity is fully logged and linked to corresponding transaction entries for transparency.
+
+Basic Features
+A user can propose a bet by defining the event, odds, and stake amount.
+Another user can accept the wager, matching or proportionally countering the stake.
+Once accepted, the wager locks both users’ committed balances until the outcome is recorded.
+Each bet includes fields for description, odds, stakes, timestamps, and outcome.
+Both proposer and acceptor can view their active and past bets with full details on counterparties, stakes, and results.
+All bet actions are tied to transaction logs for auditability.
+
+Bonus Features
+AI Fairness Assistant: Uses natural language processing to review new bet proposals, flagging unclear or biased terms before users commit.
+Personalized Betting Insights: Recommends bet types, optimal stake sizes, and risk levels based on each user’s history and performance patterns.
+Fraud Detection: Machine learning models monitor for unusual betting behavior, duplicate accounts, or collusion between users.
+
+
+
+Friends / Social Guru
+
+Basic requirements:
+A user should be able to send and receive friend requests. Once accepted, both users are added to each other’s friend lists. There should also be a way to remove or block a friend.
+Add functionality for “betting circles,” which are private groups where friends can propose bets only visible to members of the circle.
+Each user should have a “Head to Head Statistics” to check the history of bets against a specific Friend, the win ratio of each, and the overall P/L for each side.
+A user should be able to view a  list of mutual friends for each friend they have.
+A leaderboard should be available that ranks the user and their friends based on customizable metrics such as total winnings, number of bets placed, or streaks of successful bets.
+
+Possible additional features:
+Add functionality for team betting, where a group of friends can pool resources and place a joint wager, with automatic distribution of payouts.
+Add integration with external social media platforms to allow users to share major wins or friend challenges outside the app.
+
+
+
+
+Comments/Discussions Guru
+
+Who can see/post:
+Private bet thread (default): only the three participants (proposer, acceptor, arbiter).
+Optional public thread: anyone can read; posting rules configurable.
+What it does:
+Creates exactly one discussion thread per bet.
+Lets allowed users post messages, edit (soft-edit timestamped), and delete (soft-delete).
+Supports @mentions, simple reactions (like/helpful/funny), and reporting for moderation.
+Paginates and orders comments newest-first; supports “load more” with a cursor.
+Indexes and queries for “recent comments by a user” (handy for the milestone endpoint).
+
+To keep negotiation, clarifications, and evidence sharing tied to a bet, with strict access control so only participants can influence private bet communications.
+On the Bet Detail page: a “Discussion” tab with an input box (enabled only for the 3 parties in private threads), infinite scroll list, reactions, and mention autocomplete.
+On User Profile: a “Recent comments” widget (top 5).
+
+
+Order Book Guru
+This section manages all open wagers that function through an exchange style matching system instead of direct agreements. The order book allows users to post orders to take either side of a wager and automatically matches compatible orders based on odds and stake size. Once an order is matched, it becomes a formal bet between two users, handled through the same settlement and transaction logic used for direct bets.
+Basic Features
+Users can place open orders specifying the event, side, odds, and stake amount. Orders remain active in the book until they are matched, canceled, or expire.
+The system automatically matches opposing orders with compatible terms like event, odds, opposite sides.
+Once a match is made, both parties funds are locked in until the outcome is determined, ensuring balance consistency and preventing double spending.
+Matched orders generate new bet entries linked to the two users and the corresponding transaction records.
+Unmatched orders can be canceled by the user at any time or expire automatically when the event starts.
+All order actions like placement, matching, cancellation, and settlement are logged for auditability and analytics.
+Bonus Features
+Partial order matching is supported, meaning if one user’s large order can be filled by several smaller counter orders, the system fills each portion sequentially until the total stake is met.
+Dynamic odds adjustment allows users to set a range, like plus or minus 0.05, enabling the system to slightly adjust their order to improve match probability.
+Market analytics display order depth, active markets, and recent matches to give users real-time insights into liquidity and betting trends.
+All operations execute atomically using SQL transactions to ensure consistency and prevent incomplete matches or lost funds.
+
+
+Customer Support Guru
+
+Who can see/post:
+Ticket creator: full read/write on their ticket.
+Staff (is_staff): queue views, assignment, internal notes (visible only to staff).
+
+What it does:
+Opens a support ticket with a subject, initial message, optional bet link, and priority.
+Threads all subsequent messages under the ticket; auto-bumps “updated at” for queue freshness.
+Allows status changes (OPEN, ASSIGNED, WAITING_USER, WAITING_STAFF, RESOLVED, CLOSED).
+Supports internal staff-only notes and lightweight tags (e.g., “refund”, “payments”, “abuse”).
+Provides list views: “My tickets” (for users) and “Queues/Assigned to me” (for staff).
+(Optional) Hooks: on resolution, trigger refunds/payouts; log actions for audit.
+
+To triage issues (payments, disputes, moderation) quickly, keep a paper trail, and let staff collaborate privately while communicating clearly with the user.
+“Help & Support” page: create ticket form + list of my tickets with status chips.
+Staff console: filter by status/priority/assignee, open a ticket, reply or add internal notes, change status/assignee, and see related bet.
+A dispute that starts in a bet discussion can escalate to a support ticket (with the bet auto-linked).
+Support actions (e.g., refund) write to Transactions; outcomes can update Reputation_Logs/Achievements if relevant.
+Both gurus enforce strict permissions and provide fast, index-backed queries for your milestone endpoints and demo flows.
+
+AI Guru
+This section provides the platform’s intelligence layer—powering fair bet creation, risk-aware staking, dispute assistance, and integrity monitoring. Models convert raw app data (bet text, stakes, outcomes, user behavior) into predictions, flags, and recommendations. All outputs are explainable, logged, and permissioned so product and compliance teams can audit decisions.
+Basic Features
+Bet Clarity & Fairness Check: NLP validates proposed bet text, flags ambiguous terms, suggests standardized templates, and highlights edge cases before users commit.
+Win-Probability & Odds Assist: Predictive models estimate outcome probabilities and recommend fair odds/spreads
+Stake & Risk Guidance: Personalization suggests stake ranges based on user history, bankroll health, and risk tolerance; warns on overexposure.
+Toxicity & Policy Guardrails: Real-time content filters for harassment, hate, or prohibited topics in bet descriptions and chat.
+Outcome Verification Assist: Pulls structured facts from trusted sources (or admin feeds) to help arbiters confirm results faster, with citations.
+Bonus Features (AI Enhancements)
+AI Arbiter Copilot: Drafts proposed resolutions for disputed direct bets, with evidence snippets and confidence scoring for human review.
+Dynamic Limits: Adjusts per-user bet caps and cooldowns in real time based on risk signals and bankroll volatility.
+Simulation Sandbox: Offline counterfactuals to test new pricing/risk rules on historical data before production rollout.
+Model Governance Suite: Versioned models, bias checks, drift alerts, A/B experiment tracker, and rollback switches.
+Multilingual Support: Cross-lingual bet parsing and moderation so users can bet in their preferred language without losing clarity.
+
+Tech Stack
+
+As for our tech stack, our frontend is built with Next.js, leveraging ShadCN components for a clean UI design. The interface will be written primarily in TypeScript, JavaScript, and HTML, and will be hosted on Vercel for seamless deployment. This setup allows for a fast, dynamic user experience with component based design.
+Our backend runs on Node.js, connecting to a Supabase instance that uses PostgreSQL as its relational database. Supabase provides authentication, row-level security, and real-time database capabilities, while PostgreSQL ensures strong consistency and relational integrity for all our transactional data. Together, these technologies form a reliable foundation for handling user activity, bets, transactions, and social features efficiently.
+
+What we have done so far
+Since the last milestone, as a team we updated our proposal, increasing the amount
+of work for each person. We divided into different "Gurus" and each one is a part of the 
+backend tech stack, and all of them work together to create the entire backend. Additionally, we added a use of the react stack, which contains react.js which is the foundational library for declarative and component based user interfaces. Our backend is no.js which is a javascript runtime environment. Each person explained what features their "guru" has, and then created a small SQL schema table which will be the basis of the backend coding. We added a schedule for meetings 2 times a week to work together and make sure everyone continues doing their work.
+
+To-do
+
+As for the things we need to do until we conclude the project,  TO-DO
+
+Finalize Database Design
+Create tables
+Foreign dependencies and keys
+Reference each “guru together”
+Integrate all Guru’s Schema
+A part of foreign keys and referencing
+Backend Development
+Frontend Development
+Integration
+End-end final product
+Testing and Debugging
+Many uses of apps from many people to test all different aspects
+Documentation
+Presentation and Demo Preparation
+
+
