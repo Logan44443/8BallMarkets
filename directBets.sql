@@ -6,13 +6,13 @@
    that moves money between AVAILABLE and HELD “buckets”.
  - Full audit trail (`bet_audit_log`) + link table tying ledger txs to bets.
  - Triggers to enforce:
-     * acceptance rules + stake immutability
+     * acceptance rules + stake/terms immutability
      * valid status transitions (PENDING→ACTIVE→RESOLVED/DISPUTED etc.)
      * authorization for RESOLVED/DISPUTED (arbiter or admin)
      * automatic wallet postings on accept / resolve / cancel-expire paths
  - Convenience functions: propose / accept / resolve / dispute / cancel-expire
- - Optional hooks & notes for: fees, odds-based payout math, notifications,
-   and stronger wallet balance enforcement.
+ - Fees + odds-based payout math implemented (house user via app_settings)
+ - Stronger wallet balance enforcement for AVAILABLE debits.
 
  HOW AUTH WORKS INSIDE THE DB
  - The app sets two GUCs (session variables) per transaction:
@@ -45,11 +45,18 @@ CREATE TABLE IF NOT EXISTS direct_bets (
   accepted_at          TIMESTAMPTZ,
   resolved_at          TIMESTAMPTZ,
 
-  -- description & odds (odds not used for payout in baseline)
+  -- description & odds (DECIMAL odds required for ODDS model)
   event_description    TEXT NOT NULL,
   odds_format          TEXT NOT NULL DEFAULT 'DECIMAL'
                        CHECK (odds_format IN ('DECIMAL','AMERICAN','FRACTIONAL')),
-  odds_proposer        NUMERIC(10,4),  -- proposer’s view of odds; informational for now
+  odds_proposer        NUMERIC(10,4),   -- proposer’s decimal odds when payout_model='ODDS'
+  odds_acceptor        NUMERIC(10,4),   -- acceptor’s decimal odds when payout_model='ODDS'
+
+  -- payout model & fees
+  payout_model         TEXT NOT NULL DEFAULT 'EVENS'
+                       CHECK (payout_model IN ('EVENS','ODDS')),
+  fee_bps              INT  NOT NULL DEFAULT 0
+                       CHECK (fee_bps BETWEEN 0 AND 10000),
 
   -- money fields (integer cents avoids float rounding)
   stake_proposer_cents BIGINT NOT NULL CHECK (stake_proposer_cents > 0),
@@ -68,10 +75,22 @@ CREATE TABLE IF NOT EXISTS direct_bets (
     arbiter_id IS NULL OR
     (arbiter_id IS DISTINCT FROM proposer_id AND arbiter_id IS DISTINCT FROM acceptor_id)
   ),
+
   -- if there is an acceptor, there must be an acceptor stake
   CHECK (
     (acceptor_id IS NULL AND stake_acceptor_cents IS NULL)
     OR (acceptor_id IS NOT NULL AND stake_acceptor_cents IS NOT NULL)
+  ),
+
+  -- odds presence only when payout_model='ODDS'; and require DECIMAL odds
+  CONSTRAINT chk_odds_presence CHECK (
+    (payout_model = 'EVENS')
+    OR (
+         payout_model = 'ODDS'
+     AND odds_format  = 'DECIMAL'
+     AND odds_proposer IS NOT NULL AND odds_proposer > 1.0
+     AND odds_acceptor IS NOT NULL AND odds_acceptor > 1.0
+    )
   )
 );
 
@@ -133,6 +152,14 @@ CREATE TABLE IF NOT EXISTS bet_audit_log (
 );
 
 /* ---------------------------------------------------------------------------
+App settings (for house account, etc.)
+---------------------------------------------------------------------------- */
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+/* ---------------------------------------------------------------------------
 View for quick wallet inspection by user.
    - Sums postings across all transactions to show current bucket balances.
    - In production, consider a materialized view or precomputed balances table.
@@ -146,9 +173,7 @@ FROM ledger_postings p
 GROUP BY p.user_id;
 
 /* ---------------------------------------------------------------------------
-HELPERS: read app auth flags (GUCs)
-   - app.current_user_id: BIGINT (nullable)
-   - app.current_is_admin: 'on'/'off' (defaults to 'off' if missing)
+HELPERS: read app auth flags (GUCs) and house account
 ---------------------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION app__current_user_id() RETURNS BIGINT
 LANGUAGE plpgsql AS $$
@@ -165,8 +190,18 @@ DECLARE v TEXT; BEGIN
   RETURN COALESCE(v,'off') IN ('on','true','1');
 END $$;
 
+CREATE OR REPLACE FUNCTION app__house_user_id() RETURNS BIGINT
+LANGUAGE plpgsql AS $$
+DECLARE v TEXT; BEGIN
+  SELECT value INTO v FROM app_settings WHERE key='house_user_id';
+  IF v IS NULL THEN
+    RAISE EXCEPTION 'Missing app_settings.house_user_id';
+  END IF;
+  RETURN v::BIGINT;
+END $$;
+
 /* ---------------------------------------------------------------------------
- 4) BEFORE UPDATE TRIGGER ON direct_bets
+  BEFORE UPDATE TRIGGER ON direct_bets
    ENFORCES:
    - Accept flow (NULL→NOT NULL acceptor): require stake, set accepted_at, set ACTIVE
    - Currency immutability after acceptance
@@ -176,7 +211,7 @@ END $$;
        * ACTIVE→DISPUTED requires notes and party/arbiter/admin authorization
        * DISPUTED→RESOLVED requires outcome and arbiter/admin authorization
        * RESOLVED/CANCELED/EXPIRED are terminal (immutable)
-   - Stake/terms immutability after acceptance
+   - Stake/terms immutability after acceptance (including odds & fee_bps)
 ---------------------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION trg_direct_bets_before_update()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
@@ -197,12 +232,29 @@ BEGIN
       RAISE EXCEPTION 'currency_code cannot change on acceptance';
     END IF;
 
+    -- ODDS model guardrails at accept time (DECIMAL odds only for now)
+    IF COALESCE(NEW.payout_model,'EVENS') = 'ODDS' THEN
+      IF NEW.odds_format <> 'DECIMAL' THEN
+        RAISE EXCEPTION 'For payout_model=ODDS, odds_format must be DECIMAL';
+      END IF;
+      IF NEW.odds_acceptor IS NULL OR NEW.odds_acceptor <= 1.0 THEN
+        RAISE EXCEPTION 'odds_acceptor must be > 1.0 for ODDS';
+      END IF;
+      IF NEW.odds_proposer IS NULL OR NEW.odds_proposer <= 1.0 THEN
+        RAISE EXCEPTION 'odds_proposer must be > 1.0 for ODDS';
+      END IF;
+    END IF;
+
     -- freeze core terms right at accept time
     IF NEW.stake_proposer_cents <> OLD.stake_proposer_cents
        OR NEW.odds_format <> OLD.odds_format
        OR NEW.odds_proposer <> OLD.odds_proposer
-       OR NEW.event_description <> OLD.event_description THEN
-      RAISE EXCEPTION 'Proposer terms are immutable upon acceptance';
+       OR NEW.event_description <> OLD.event_description
+       OR NEW.payout_model <> OLD.payout_model
+       OR NEW.fee_bps <> OLD.fee_bps
+       OR COALESCE(NEW.odds_acceptor, OLD.odds_acceptor) <> COALESCE(OLD.odds_acceptor, NEW.odds_acceptor)
+    THEN
+      RAISE EXCEPTION 'Terms are immutable upon acceptance';
     END IF;
 
     NEW.accepted_at := NOW();
@@ -276,11 +328,15 @@ BEGIN
     END CASE;
   END IF;
 
-  /* -- Stakes become immutable after acceptance */
+  /* -- Terms become immutable after acceptance */
   IF OLD.acceptor_id IS NOT NULL THEN
     IF NEW.stake_proposer_cents <> OLD.stake_proposer_cents
-       OR NEW.stake_acceptor_cents <> OLD.stake_acceptor_cents THEN
-      RAISE EXCEPTION 'Stake fields are immutable after acceptance';
+       OR NEW.stake_acceptor_cents <> OLD.stake_acceptor_cents
+       OR NEW.odds_acceptor <> OLD.odds_acceptor
+       OR NEW.payout_model <> OLD.payout_model
+       OR NEW.fee_bps <> OLD.fee_bps
+    THEN
+      RAISE EXCEPTION 'Stake/odds/fee fields are immutable after acceptance';
     END IF;
   END IF;
 
@@ -294,15 +350,15 @@ FOR EACH ROW
 EXECUTE FUNCTION trg_direct_bets_before_update();
 
 /* ---------------------------------------------------------------------------
- 5) AFTER UPDATE TRIGGER ON direct_bets
+  AFTER UPDATE TRIGGER ON direct_bets
    DOES:
    - Writes a JSON diff to bet_audit_log on any update
    - On PENDING→ACTIVE (accept): HOLD both users’ stakes (AVAILABLE→HELD)
    - On RESOLVED:
        * RELEASE both holds (HELD→AVAILABLE)
        * If VOID: stop there
-       * Else: PAYOUT the winner with the total pot
-         (baseline math; odds/fees hooks included as TODO)
+       * Else: PAYOUT winner with winnings (EVENS or ODDS model) minus fee
+         (fee credited to house account from app_settings.house_user_id)
    - On DISPUTED: just audit (funds remain HELD)
    - On PENDING→CANCELED/EXPIRED: audit; add refund releases if you pre-hold
    - Emits NOTIFY hooks you can subscribe to in your worker (optional)
@@ -312,7 +368,6 @@ RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
   actor BIGINT := app__current_user_id();
   tx BIGINT;
-  pot BIGINT;
 BEGIN
   /* -- Always write a human-friendly audit record with before/after snapshots */
   INSERT INTO bet_audit_log(bet_id, actor_id, action, details)
@@ -358,8 +413,8 @@ BEGIN
 
   /* ----------------------
      RESOLUTION: ACTIVE/DISPUTED → RESOLVED
-     - 1) RELEASE both holds back to AVAILABLE (unlocks money)
-     - 2) If VOID, stop. Otherwise PAYOUT winner with total pot.
+     - 1) RELEASE both HELD balances back to AVAILABLE
+     - 2) Compute winnings by model, apply fee, move funds to winner & house
   ----------------------- */
   IF NEW.status = 'RESOLVED' AND OLD.status IN ('ACTIVE','DISPUTED') THEN
     /* 1) RELEASE both HELD balances back to AVAILABLE */
@@ -376,49 +431,61 @@ BEGIN
 
     INSERT INTO bet_ledger_links(bet_id, tx_id) VALUES (NEW.bet_id, tx);
 
-    -- VOID outcome: no payout after releasing holds
+    -- VOID: nothing else to move after releasing holds
     IF NEW.outcome = 'VOID' THEN
       PERFORM pg_notify('bets_resolved_void', NEW.bet_id::text);
       RETURN NEW;
     END IF;
 
-    /* 2) PAYOUT winner with the full pot (baseline, odds ignored) */
-    pot := NEW.stake_proposer_cents + NEW.stake_acceptor_cents;
+    /* 2) Compute winnings, fees, and move net money (winner gains, loser pays, house gets fee) */
+    DECLARE
+      winner_id BIGINT;
+      loser_id  BIGINT;
+      stake_winner BIGINT;
+      stake_loser  BIGINT;
+      winnings BIGINT;
+      fee BIGINT := 0;
+      house BIGINT := app__house_user_id();
+      odds NUMERIC(10,4);
+    BEGIN
+      IF NEW.outcome = 'PROPOSER_WIN' THEN
+        winner_id := NEW.proposer_id; loser_id := NEW.acceptor_id;
+        stake_winner := NEW.stake_proposer_cents; stake_loser := NEW.stake_acceptor_cents;
+        odds := CASE WHEN NEW.payout_model='ODDS' THEN NEW.odds_proposer ELSE NULL END;
+      ELSE
+        winner_id := NEW.acceptor_id; loser_id := NEW.proposer_id;
+        stake_winner := NEW.stake_acceptor_cents; stake_loser := NEW.stake_proposer_cents;
+        odds := CASE WHEN NEW.payout_model='ODDS' THEN NEW.odds_acceptor ELSE NULL END;
+      END IF;
 
-    /* --------------------------------------------------------------------
-       TODO (Fees): If charging fees, compute fee_cents here and post
-       an extra line to a house account. E.g. fee_cents := (pot * fee_bps)/10000
-       Then pay (pot - fee_cents) to winner, and credit fee to house.
-       You would also add house_account_user_id to users and reference it here.
-       -------------------------------------------------------------------- */
+      IF COALESCE(NEW.payout_model,'EVENS') = 'EVENS' THEN
+        winnings := stake_loser;  -- classic even-money transfer
+      ELSE
+        -- ODDS: decimal odds already validated > 1.0; cap by opponent stake
+        winnings := LEAST( FLOOR(stake_winner * (odds - 1.0)), stake_loser );
+      END IF;
 
-    /* --------------------------------------------------------------------
-       TODO (Odds-based settlement): If you want to honor odds, replace the
-       simple 'pot' payout below with odds math that computes each side’s
-       risk & win and pays the correct amount (cap by stakes). The state
-       machine and holds remain correct; only payout math changes.
-       -------------------------------------------------------------------- */
+      -- Fee on winnings
+      IF NEW.fee_bps > 0 THEN
+        fee := (winnings * NEW.fee_bps) / 10000;  -- integer division floors
+      END IF;
 
-    INSERT INTO ledger_transactions(currency_code, tx_type, created_by, memo)
-    VALUES (NEW.currency_code, 'PAYOUT', NEW.resolved_by, 'Bet resolved: payout winner')
-    RETURNING tx_id INTO tx;
+      INSERT INTO ledger_transactions(currency_code, tx_type, created_by, memo)
+      VALUES (NEW.currency_code, 'PAYOUT', NEW.resolved_by, 'Bet resolved: transfer winnings and fee')
+      RETURNING tx_id INTO tx;
 
-    IF NEW.outcome = 'PROPOSER_WIN' THEN
-      -- credit winner’s AVAILABLE with the total pot, balance with losers’ offsets
-      INSERT INTO ledger_postings(tx_id, user_id, amount_cents, balance_kind)
-        VALUES
-          (tx, NEW.proposer_id,  pot, 'AVAILABLE'),
-          (tx, NEW.proposer_id, -NEW.stake_proposer_cents, 'AVAILABLE'),
-          (tx, NEW.acceptor_id, -NEW.stake_acceptor_cents, 'AVAILABLE');
-    ELSIF NEW.outcome = 'ACCEPTOR_WIN' THEN
-      INSERT INTO ledger_postings(tx_id, user_id, amount_cents, balance_kind)
-        VALUES
-          (tx, NEW.acceptor_id,  pot, 'AVAILABLE'),
-          (tx, NEW.proposer_id, -NEW.stake_proposer_cents, 'AVAILABLE'),
-          (tx, NEW.acceptor_id, -NEW.stake_acceptor_cents, 'AVAILABLE');
-    END IF;
+      -- Winner gets winnings minus fee; loser pays full winnings; house gets fee
+      INSERT INTO ledger_postings(tx_id, user_id, amount_cents, balance_kind) VALUES
+        (tx, winner_id, winnings - fee, 'AVAILABLE'),
+        (tx, loser_id,  -winnings,      'AVAILABLE');
 
-    INSERT INTO bet_ledger_links(bet_id, tx_id) VALUES (NEW.bet_id, tx);
+      IF fee > 0 THEN
+        INSERT INTO ledger_postings(tx_id, user_id, amount_cents, balance_kind)
+        VALUES (tx, house, fee, 'AVAILABLE');
+      END IF;
+
+      INSERT INTO bet_ledger_links(bet_id, tx_id) VALUES (NEW.bet_id, tx);
+    END;
 
     PERFORM pg_notify('bets_resolved', NEW.bet_id::text);
     RETURN NEW;
@@ -443,10 +510,10 @@ EXECUTE FUNCTION trg_direct_bets_after_update();
 
 /* ---------------------------------------------------------------------------
   API FUNCTIONS
-   - bet_propose: creates a PENDING bet
-   - bet_accept:   accepts a bet (locks funds via trigger)
-   - bet_resolve:  resolves a bet (releases & pays via trigger)
-   - bet_dispute:  marks a bet DISPUTED (funds remain HELD)
+   - bet_propose: creates a PENDING bet (now supports payout model + fee)
+   - bet_accept:  accepts a bet (locks funds via trigger; may set odds_acceptor)
+   - bet_resolve: resolves a bet (releases & pays via trigger)
+   - bet_dispute: marks a bet DISPUTED (funds remain HELD)
    - bet_cancel_or_expire: cancels/auto-expires a PENDING bet
 ---------------------------------------------------------------------------- */
 
@@ -458,21 +525,30 @@ CREATE OR REPLACE FUNCTION bet_propose(
   p_odds_proposer NUMERIC,
   p_stake_proposer_cents BIGINT,
   p_currency CHAR(3),
-  p_arbiter_id BIGINT DEFAULT NULL
+  p_arbiter_id BIGINT DEFAULT NULL,
+  p_payout_model TEXT DEFAULT 'EVENS',   -- NEW
+  p_fee_bps INT DEFAULT 0                -- NEW
 ) RETURNS BIGINT
 LANGUAGE plpgsql AS $$
 DECLARE new_id BIGINT; BEGIN
   INSERT INTO direct_bets(
     proposer_id, event_description, odds_format, odds_proposer,
-    stake_proposer_cents, currency_code, arbiter_id
+    stake_proposer_cents, currency_code, arbiter_id,
+    payout_model, fee_bps
   )
-  VALUES (p_proposer_id, p_event_description, p_odds_format, p_odds_proposer,
-          p_stake_proposer_cents, p_currency, p_arbiter_id)
+  VALUES (
+    p_proposer_id, p_event_description, p_odds_format, p_odds_proposer,
+    p_stake_proposer_cents, p_currency, p_arbiter_id,
+    p_payout_model, p_fee_bps
+  )
   RETURNING bet_id INTO new_id;
 
   INSERT INTO bet_audit_log(bet_id, actor_id, action, details)
   VALUES (new_id, p_proposer_id, 'PROPOSE',
-          jsonb_build_object('stake', p_stake_proposer_cents, 'currency', p_currency));
+          jsonb_build_object('stake', p_stake_proposer_cents,
+                             'currency', p_currency,
+                             'payout_model', p_payout_model,
+                             'fee_bps', p_fee_bps));
 
   RETURN new_id;
 END $$;
@@ -481,7 +557,8 @@ END $$;
 CREATE OR REPLACE FUNCTION bet_accept(
   p_bet_id BIGINT,
   p_acceptor_id BIGINT,
-  p_stake_acceptor_cents BIGINT
+  p_stake_acceptor_cents BIGINT,
+  p_odds_acceptor NUMERIC DEFAULT NULL    -- NEW (used if payout_model='ODDS')
 ) RETURNS VOID
 LANGUAGE plpgsql AS $$
 DECLARE b direct_bets; BEGIN
@@ -495,7 +572,8 @@ DECLARE b direct_bets; BEGIN
 
   UPDATE direct_bets
      SET acceptor_id = p_acceptor_id,
-         stake_acceptor_cents = p_stake_acceptor_cents
+         stake_acceptor_cents = p_stake_acceptor_cents,
+         odds_acceptor = COALESCE(p_odds_acceptor, b.odds_acceptor)
    WHERE bet_id = p_bet_id;
 END $$;
 
@@ -548,7 +626,9 @@ DECLARE s TEXT; BEGIN
   UPDATE direct_bets SET status = p_new_status WHERE bet_id = p_bet_id;
 END $$;
 
-
+/* ---------------------------------------------------------------------------
+  Wallet guard: prevent AVAILABLE from going negative on debits
+---------------------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION trg_ledger_postings_before_insert()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE cur_avail BIGINT; BEGIN
@@ -573,4 +653,8 @@ BEFORE INSERT ON ledger_postings
 FOR EACH ROW
 EXECUTE FUNCTION trg_ledger_postings_before_insert();
 
-
+/* ---------------------------------------------------------------------------
+  Bootstrap note:
+  -  must insert your house account user_id before resolving bets with fees:
+      INSERT INTO app_settings(key, value) VALUES ('house_user_id','<USER_ID>');
+---------------------------------------------------------------------------- */
