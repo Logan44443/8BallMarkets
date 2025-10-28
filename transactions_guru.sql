@@ -98,3 +98,77 @@ FROM account_balance a
 LEFT JOIN ledger l ON l.uid = a.uid
 GROUP BY a.uid, a.balance_cents
 HAVING a.balance_cents <> COALESCE(SUM(l.amount_cents),0);
+
+-- Transactions
+
+-- 0) Safety: balance table (no-op if it already exists)
+CREATE TABLE IF NOT EXISTS account_balance (
+  uid BIGINT PRIMARY KEY,
+  balance_cents BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 1) Minimal sign enforcement for deposits/withdrawals
+CREATE OR REPLACE FUNCTION fn_assert_basic_signs()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.type = 'DEPOSIT' AND NEW.amount_cents <= 0 THEN
+    RAISE EXCEPTION 'DEPOSIT must be positive';
+  END IF;
+
+  IF NEW.type = 'WITHDRAWAL' AND NEW.amount_cents >= 0 THEN
+    RAISE EXCEPTION 'WITHDRAWAL must be negative';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_assert_basic_signs ON ledger;
+CREATE TRIGGER trg_assert_basic_signs
+BEFORE INSERT ON ledger
+FOR EACH ROW EXECUTE FUNCTION fn_assert_basic_signs();
+
+-- 2) Single source of truth: apply ledger deltas to account_balance
+CREATE OR REPLACE FUNCTION fn_apply_ledger_to_balance()
+RETURNS trigger AS $$
+BEGIN
+  -- Upsert and add the delta atomically
+  INSERT INTO account_balance(uid, balance_cents, updated_at)
+  VALUES (NEW.uid, NEW.amount_cents, NOW())
+  ON CONFLICT (uid) DO UPDATE
+    SET balance_cents = account_balance.balance_cents + EXCLUDED.balance_cents,
+        updated_at    = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_apply_ledger ON ledger;
+CREATE TRIGGER trg_apply_ledger
+AFTER INSERT ON ledger
+FOR EACH ROW EXECUTE FUNCTION fn_apply_ledger_to_balance();
+
+-- 3) Tiny API: deposit / withdraw (use these instead of manual inserts)
+CREATE OR REPLACE FUNCTION fn_deposit(p_uid BIGINT, p_amount BIGINT, p_ref TEXT DEFAULT NULL)
+RETURNS BIGINT AS $$
+DECLARE v_id BIGINT;
+BEGIN
+  -- Must be positive; trigger enforces sign
+  INSERT INTO ledger(uid, type, amount_cents, related_id)
+  VALUES (p_uid, 'DEPOSIT', p_amount, p_ref)
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION fn_withdraw(p_uid BIGINT, p_amount BIGINT, p_ref TEXT DEFAULT NULL)
+RETURNS BIGINT AS $$
+DECLARE v_id BIGINT;
+BEGIN
+  -- Must be negative; trigger enforces sign
+  INSERT INTO ledger(uid, type, amount_cents, related_id)
+  VALUES (p_uid, 'WITHDRAWAL', -p_amount, p_ref)
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$$ LANGUAGE plpgsql;
