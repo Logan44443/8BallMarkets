@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS Bet_Threads (
+  thread_id INT AUTO_INCREMENT PRIMARY KEY,
+  bet_id INT NOT NULL UNIQUE,
+  visibility ENUM('PRIVATE_BET_THREAD','PUBLIC') DEFAULT 'PRIVATE_BET_THREAD',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (bet_id) REFERENCES Bets(bet_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS Comments (
+  comment_id INT AUTO_INCREMENT PRIMARY KEY,
+  thread_id INT NOT NULL,
+  author_id INT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  is_deleted BOOLEAN DEFAULT FALSE,
+  FOREIGN KEY (thread_id) REFERENCES Bet_Threads(thread_id) ON DELETE CASCADE,
+  FOREIGN KEY (author_id) REFERENCES Users(user_id) ON DELETE CASCADE,
+  INDEX idx_comments_thread_time (thread_id, created_at DESC)
+);
