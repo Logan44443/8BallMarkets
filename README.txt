@@ -4,18 +4,24 @@ Team Members: Logan Azizzadeh, Lukas Horvat, Dylan Cohen, Carlos Penzini, Alain 
 
 Github link: https://github.com/Logan44443/8BallMarkets 
 
-Progress: Since the last milestone, as a team we updated our proposal, increasing the amount
-of work for each person. We divided into different "Gurus" and each one is a part of the 
-backend tech stack, and all them them work together to create the entire backend. Additionally,
-we added a use of the react stack, which contains react.js which is the foundational library
-for declarative and component based user interfases. Our backend is no.js which is a javascript
-runtime environment. Each person explained what features their "guru" has, and then created
-a small SQL schema table which will be the basis of the backend coding. We added a schedule for meetings 2
-times a week to work together and make sure everyone continues doing their work.
+Progress: Since the last milestone, we set up a local Supabase PostgreSQL database and 
+consolidated all our SQL schemas into a unified structure. We built a Next.js frontend with 
+ShadCN UI components and connected it to the backend. Each guru implemented their core feature
+with at least one API endpoint and corresponding frontend element. We simplified the database
+schema to focus on MVP features for our demo, removing unnecessary complexity like two-factor
+authentication and advanced statistics. The app now supports user login, wallet balances,
+creating and accepting bets with escrow, bet-specific chat, friend requests, and support tickets.
 
-Logan: proposed the User Guru, made the schema, wrote the README
-Dylan: proposed the transactions Guru, made the transaction schema
-Carlos: proposed the direct bets and AI gurus and made the schemas
-Lukas: proposed the comments/discussion and support guru and made the schema
-Leonardo: proposed social guru and made the schema
-Alain: figured out tech stack and the order book (non-direct bets) guru and made the schema
+Logan: User guru - authentication system and user management
+  (Implementation: app/app/login/page.tsx for user authentication)
+Dylan: Transactions guru - wallet balance and escrow logic  
+  (Implementation: Wallet balance in app/app/dashboard/page.tsx, escrow in create/accept bet flows)
+Carlos: Direct bets guru - bet creation and marketplace
+  (Implementation: app/app/bets/create/page.tsx and app/app/bets/marketplace/page.tsx)
+Lukas: Comments and support guru - chat interface and support tickets
+  (Implementation: Chat dialog in app/app/bets/my-bets/page.tsx, support ticket dialog in app/app/dashboard/page.tsx)
+Leonardo: Social guru - friend requests and friend list management
+  (Implementation: Friends List card in app/app/dashboard/page.tsx with search, requests, and friend list)
+Alain: Order book guru - Tech stack setup, Marketplace
+  (Implementation: Supabase setup in supabase/migrations/, frontend structure in app/, marketplace in app/app/bets/marketplace/page.tsx)
+
