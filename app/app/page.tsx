@@ -12,8 +12,8 @@ export default function Home() {
   }, [router])
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div>Redirecting to login...</div>
+    <div className="min-h-screen flex items-center justify-center" style={{backgroundColor: 'transparent'}}>
+      <div className="text-white">Redirecting to login...</div>
     </div>
   )
 }

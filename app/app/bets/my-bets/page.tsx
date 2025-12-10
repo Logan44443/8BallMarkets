@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { setAuthContext } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -53,6 +54,11 @@ export default function MyBetsPage() {
   const [sendingMessage, setSendingMessage] = useState(false)
   const [acceptingBet, setAcceptingBet] = useState<number | null>(null)
   const [rejectingBet, setRejectingBet] = useState<number | null>(null)
+  const [cancelingBet, setCancelingBet] = useState<number | null>(null)
+  const [disputeDialogOpen, setDisputeDialogOpen] = useState(false)
+  const [disputeBet, setDisputeBet] = useState<Bet | null>(null)
+  const [disputeNotes, setDisputeNotes] = useState('')
+  const [submittingDispute, setSubmittingDispute] = useState(false)
 
   useEffect(() => {
     loadMyBets()
@@ -203,22 +209,26 @@ export default function MyBetsPage() {
         return
       }
 
-      // Update balance in database
-      const newBalance = user.wallet_balance - (stakeAmount / 100)
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ wallet_balance: newBalance })
-        .eq('user_id', user.id)
+      // Wait a moment for sync trigger to update balance
+      await new Promise(resolve => setTimeout(resolve, 300))
 
-      if (updateError) {
-        console.error('Error updating balance:', updateError)
-        alert('Failed to update balance. Please try again.')
-        return
+      // Refresh balance from database (sync trigger should have updated it)
+      const { data: updatedBalance, error: balanceError } = await supabase
+        .from('users')
+        .select('wallet_balance')
+        .eq('user_id', user.id)
+        .single()
+
+      if (balanceError) {
+        console.error('Error fetching updated balance:', balanceError)
       }
 
-      // Update local storage balance
-      user.wallet_balance = newBalance
-      localStorage.setItem('user', JSON.stringify(user))
+      // Update local storage balance with fresh value
+      if (updatedBalance) {
+        user.wallet_balance = updatedBalance.wallet_balance
+        user.balance = updatedBalance.wallet_balance
+        localStorage.setItem('user', JSON.stringify(user))
+      }
 
       alert('Bet accepted successfully!')
       
@@ -239,19 +249,42 @@ export default function MyBetsPage() {
 
     setRejectingBet(bet.bet_id)
     try {
-      // Delete the bet
-      const { error } = await supabase
-        .from('direct_bets')
-        .delete()
-        .eq('bet_id', bet.bet_id)
-
-      if (error) {
-        console.error('Error rejecting bet:', error)
-        alert('Failed to reject bet. Please try again.')
+      const userData = localStorage.getItem('user')
+      if (!userData) {
+        router.push('/login')
         return
       }
 
-      alert('Bet rejected successfully!')
+      const user = JSON.parse(userData)
+      await setAuthContext(user.id, user.is_admin || false)
+
+      // Use cancel function instead of delete (for direct bets, rejecting = canceling)
+      const { error } = await supabase.rpc('bet_cancel_or_expire', {
+        p_bet_id: bet.bet_id,
+        p_new_status: 'CANCELED'
+      })
+
+      if (error) {
+        console.error('Error rejecting bet:', error)
+        alert('Failed to reject bet: ' + error.message)
+        return
+      }
+
+      // Refresh balance (funds should be released)
+      await new Promise(resolve => setTimeout(resolve, 300))
+      const { data: updatedBalance, error: balanceError } = await supabase
+        .from('users')
+        .select('wallet_balance')
+        .eq('user_id', user.id)
+        .single()
+
+      if (updatedBalance) {
+        user.wallet_balance = updatedBalance.wallet_balance
+        user.balance = updatedBalance.wallet_balance
+        localStorage.setItem('user', JSON.stringify(user))
+      }
+
+      alert('Bet rejected successfully! Funds have been released.')
       
       // Reload bets
       await loadMyBets()
@@ -260,6 +293,98 @@ export default function MyBetsPage() {
       alert('An error occurred. Please try again.')
     } finally {
       setRejectingBet(null)
+    }
+  }
+
+  const handleCancelBet = async (bet: Bet, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent opening chat dialog
+    
+    if (!confirm('Are you sure you want to cancel this bet? Your funds will be released back to your wallet.')) return
+
+    setCancelingBet(bet.bet_id)
+    try {
+      const userData = localStorage.getItem('user')
+      if (!userData) {
+        router.push('/login')
+        return
+      }
+
+      const user = JSON.parse(userData)
+      await setAuthContext(user.id, user.is_admin || false)
+
+      // Call cancel function
+      const { error } = await supabase.rpc('bet_cancel_or_expire', {
+        p_bet_id: bet.bet_id,
+        p_new_status: 'CANCELED'
+      })
+
+      if (error) {
+        console.error('Error canceling bet:', error)
+        alert('Failed to cancel bet: ' + error.message)
+        return
+      }
+
+      // Refresh balance (funds should be released)
+      await new Promise(resolve => setTimeout(resolve, 300))
+      const { data: updatedBalance, error: balanceError } = await supabase
+        .from('users')
+        .select('wallet_balance')
+        .eq('user_id', user.id)
+        .single()
+
+      if (updatedBalance) {
+        user.wallet_balance = updatedBalance.wallet_balance
+        user.balance = updatedBalance.wallet_balance
+        localStorage.setItem('user', JSON.stringify(user))
+      }
+
+      alert('Bet canceled successfully! Your funds have been released back to your wallet.')
+      
+      // Reload bets
+      await loadMyBets()
+    } catch (err) {
+      console.error('Error canceling bet:', err)
+      alert('An error occurred. Please try again.')
+    } finally {
+      setCancelingBet(null)
+    }
+  }
+
+  const openDisputeDialog = (bet: Bet, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent opening chat dialog
+    setDisputeBet(bet)
+    setDisputeDialogOpen(true)
+  }
+
+  const handleSubmitDispute = async () => {
+    if (!disputeBet || !disputeNotes.trim()) {
+      alert('Please provide a reason for the dispute')
+      return
+    }
+
+    setSubmittingDispute(true)
+    try {
+      const { error } = await supabase.rpc('bet_dispute', {
+        p_bet_id: disputeBet.bet_id,
+        p_notes: disputeNotes
+      })
+
+      if (error) {
+        console.error('Error disputing bet:', error)
+        alert('Failed to dispute bet: ' + error.message)
+        return
+      }
+
+      alert('Dispute submitted successfully! The arbiter will review.')
+      setDisputeDialogOpen(false)
+      setDisputeNotes('')
+      setDisputeBet(null)
+      await loadMyBets()
+    } catch (err) {
+      console.error('Error disputing bet:', err)
+      alert('An error occurred. Please try again.')
+    } finally {
+      setSubmittingDispute(false)
     }
   }
 
@@ -406,10 +531,10 @@ export default function MyBetsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen p-8" style={{backgroundColor: 'transparent'}}>
       <div className="max-w-7xl mx-auto">
         <div className="mb-6 flex justify-between items-center">
-          <h1 className="text-3xl font-bold">My Bets</h1>
+          <h1 className="text-3xl font-bold text-white">My Bets</h1>
           <Button variant="outline" onClick={() => router.push('/dashboard')}>
             ← Dashboard
           </Button>
@@ -418,26 +543,30 @@ export default function MyBetsPage() {
         {/* Filter Buttons */}
         <div className="mb-6 flex gap-2">
           <Button
-            variant={filter === 'all' ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => setFilter('all')}
+            className={filter === 'all' ? 'bg-white border-blue-600 border-2 text-blue-600 font-semibold' : 'bg-white'}
           >
             All Bets
           </Button>
           <Button
-            variant={filter === 'pending' ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => setFilter('pending')}
+            className={filter === 'pending' ? 'bg-white border-blue-600 border-2 text-blue-600 font-semibold' : 'bg-white'}
           >
             Pending
           </Button>
           <Button
-            variant={filter === 'active' ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => setFilter('active')}
+            className={filter === 'active' ? 'bg-white border-blue-600 border-2 text-blue-600 font-semibold' : 'bg-white'}
           >
             Active
           </Button>
           <Button
-            variant={filter === 'resolved' ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => setFilter('resolved')}
+            className={filter === 'resolved' ? 'bg-white border-blue-600 border-2 text-blue-600 font-semibold' : 'bg-white'}
           >
             Resolved
           </Button>
@@ -531,6 +660,27 @@ export default function MyBetsPage() {
                                   {rejectingBet === bet.bet_id ? 'Rejecting...' : 'Reject'}
                                 </Button>
                               </div>
+                            )}
+                            {bet.status === 'PENDING' && isProposer && !isTarget && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-red-600 hover:bg-red-50 border-red-300"
+                                onClick={(e) => handleCancelBet(bet, e)}
+                                disabled={cancelingBet === bet.bet_id}
+                              >
+                                {cancelingBet === bet.bet_id ? 'Canceling...' : 'Cancel'}
+                              </Button>
+                            )}
+                            {bet.status === 'ACTIVE' && (bet.proposer_id === currentUserId || bet.acceptor_id === currentUserId) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-orange-600 hover:bg-orange-50"
+                                onClick={(e) => openDisputeDialog(bet, e)}
+                              >
+                                ⚠️ Dispute
+                              </Button>
                             )}
                           </td>
                         </tr>
@@ -630,6 +780,62 @@ export default function MyBetsPage() {
                 Send
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dispute Dialog */}
+        <Dialog open={disputeDialogOpen} onOpenChange={setDisputeDialogOpen}>
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Dispute Bet</DialogTitle>
+            </DialogHeader>
+            
+            {disputeBet && (
+              <div className="space-y-4">
+                <div className="bg-gray-50 p-4 rounded">
+                  <p className="font-semibold mb-2">{disputeBet.event_description}</p>
+                  <div className="text-sm text-gray-600 space-y-1">
+                    <p>Proposer: {disputeBet.proposer.username} - ${(disputeBet.stake_proposer_cents / 100).toFixed(2)}</p>
+                    <p>Acceptor: {disputeBet.acceptor?.username} - ${(disputeBet.stake_acceptor_cents ? disputeBet.stake_acceptor_cents / 100 : 0).toFixed(2)}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="disputeNotes">Why are you disputing this bet?</Label>
+                  <Textarea
+                    id="disputeNotes"
+                    placeholder="Explain why you believe this bet outcome is disputed..."
+                    value={disputeNotes}
+                    onChange={(e) => setDisputeNotes(e.target.value)}
+                    rows={4}
+                    required
+                  />
+                  <p className="text-xs text-gray-500">
+                    The arbiter will review your dispute and make a final decision
+                  </p>
+                </div>
+
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setDisputeDialogOpen(false)
+                      setDisputeNotes('')
+                      setDisputeBet(null)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleSubmitDispute}
+                    disabled={submittingDispute || !disputeNotes.trim()}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    {submittingDispute ? 'Submitting...' : 'Submit Dispute'}
+                  </Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>

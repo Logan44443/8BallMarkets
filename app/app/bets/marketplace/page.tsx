@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { setAuthContext } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -82,7 +83,10 @@ export default function MarketplacePage() {
         return
       }
 
-      // Call bet_accept function (this will move funds to HELD via the ledger)
+      // Re-establish auth context before RPC call
+      await setAuthContext(user.id, user.is_admin || false)
+
+      // Call bet_accept function (this will move funds to HELD via the trigger)
       const { error } = await supabase.rpc('bet_accept', {
         p_bet_id: betId,
         p_acceptor_id: user.id,
@@ -96,25 +100,26 @@ export default function MarketplacePage() {
         return
       }
 
-      // Update balance in database
-      const newBalance = user.wallet_balance - stakeInDollars
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ wallet_balance: newBalance })
-        .eq('user_id', user.id)
+      // Wait a moment for sync trigger to update balance
+      await new Promise(resolve => setTimeout(resolve, 300))
 
-      if (updateError) {
-        alert(`Error updating balance: ${updateError.message}`)
-        setAccepting(null)
-        return
+      // Refresh balance from database (sync trigger should have updated it)
+      const { data: updatedBalance, error: balanceError } = await supabase
+        .from('users')
+        .select('wallet_balance')
+        .eq('user_id', user.id)
+        .single()
+
+      if (balanceError) {
+        console.error('Error fetching updated balance:', balanceError)
       }
 
-      // Update user's balance in localStorage
-      localStorage.setItem('user', JSON.stringify({
-        ...user,
-        balance: newBalance,
-        wallet_balance: newBalance
-      }))
+      // Update user's balance in localStorage with fresh value
+      if (updatedBalance) {
+        user.wallet_balance = updatedBalance.wallet_balance
+        user.balance = updatedBalance.wallet_balance
+        localStorage.setItem('user', JSON.stringify(user))
+      }
 
       alert('Bet accepted successfully! Funds moved to escrow.')
       
@@ -134,10 +139,10 @@ export default function MarketplacePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen p-8" style={{backgroundColor: 'transparent'}}>
       <div className="max-w-6xl mx-auto">
         <div className="mb-6 flex justify-between items-center">
-          <h1 className="text-3xl font-bold">Bet Marketplace</h1>
+          <h1 className="text-3xl font-bold text-white">Bet Marketplace</h1>
           <Button variant="outline" onClick={() => router.push('/dashboard')}>
             ← Dashboard
           </Button>

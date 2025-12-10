@@ -46,6 +46,21 @@
 }
 
 body {
-  background: var(--background);
+  background: #004225;
   color: var(--foreground);
+}
+
+/* Animated Money Background */
+/* Continuous diagonal movement bottom-left */
+@keyframes slide-money {
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(-100px, 100px);
+  }
+}
+
+.animate-slide-money {
+  animation: slide-money 5s linear infinite;
 }
