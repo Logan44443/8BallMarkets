@@ -25,6 +25,7 @@ interface Bet {
   acceptor_id: number
   created_at: string
   accepted_at: string | null
+  dispute_notes: string | null
   outcome_notes: string | null
   proposer: { username: string }
   acceptor: { username: string } | null
@@ -72,12 +73,13 @@ export default function ArbiterDashboardPage() {
           acceptor_id,
           created_at,
           accepted_at,
+          dispute_notes,
           outcome_notes,
           proposer:users!direct_bets_proposer_id_fkey(username),
           acceptor:users!direct_bets_acceptor_id_fkey(username)
         `)
         .eq('arbiter_id', user.id)
-        .in('status', ['ACTIVE', 'DISPUTED'])
+        .in('status', ['ACTIVE', 'DISPUTED', 'RESOLVED'])
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -222,9 +224,15 @@ export default function ArbiterDashboardPage() {
                             )}
                           </div>
                         </div>
-                        {bet.outcome_notes && (
-                          <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
-                            <p className="font-medium text-yellow-800">Dispute Notes:</p>
+                        {bet.status === 'DISPUTED' && bet.dispute_notes && (
+                          <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded text-sm">
+                            <p className="font-medium text-red-800">⚠️ Dispute Notes:</p>
+                            <p className="text-gray-700">{bet.dispute_notes}</p>
+                          </div>
+                        )}
+                        {bet.status === 'RESOLVED' && bet.outcome_notes && (
+                          <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-sm">
+                            <p className="font-medium text-blue-800">📝 Resolution Notes:</p>
                             <p className="text-gray-700">{bet.outcome_notes}</p>
                           </div>
                         )}
@@ -233,15 +241,17 @@ export default function ArbiterDashboardPage() {
                           {bet.accepted_at && ` • Accepted: ${new Date(bet.accepted_at).toLocaleDateString()}`}
                         </p>
                       </div>
-                      <Button 
-                        onClick={() => {
-                          setSelectedBet(bet)
-                          setResolveDialogOpen(true)
-                        }}
-                        className="ml-4"
-                      >
-                        Resolve
-                      </Button>
+                      {bet.status !== 'RESOLVED' && (
+                        <Button 
+                          onClick={() => {
+                            setSelectedBet(bet)
+                            setResolveDialogOpen(true)
+                          }}
+                          className="ml-4"
+                        >
+                          Resolve
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}

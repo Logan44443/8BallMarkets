@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -46,6 +47,7 @@ interface Bet {
   arbiter_id: number | null
   created_at: string
   accepted_at: string | null
+  dispute_notes: string | null
   outcome_notes: string | null
   proposer: { username: string }
   acceptor: { username: string } | null
@@ -128,16 +130,13 @@ export default function AdminDashboardPage() {
     }
   }
 
-  const openTicket = async (ticket: SupportTicket) => {
-    setSelectedTicket(ticket)
-    setDialogOpen(true)
-
+  const loadMessages = async (ticket: SupportTicket) => {
     // Re-establish auth context before loading messages
     if (currentUserId) {
       await setAuthContext(currentUserId, true)
     }
 
-    // Load messages for this ticket
+    // Load messages for this ticket - order by created_at ascending (oldest first)
     const { data } = await supabase
       .from('ticket_messages')
       .select(`
@@ -158,8 +157,20 @@ export default function AdminDashboardPage() {
         ...msg,
         author: Array.isArray(msg.author) ? msg.author[0] : msg.author
       }))
+      
+      // Explicitly sort by created_at as a safeguard (oldest first)
+      transformedMessages.sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+      
       setMessages(transformedMessages as TicketMessage[])
     }
+  }
+
+  const openTicket = async (ticket: SupportTicket) => {
+    setSelectedTicket(ticket)
+    setDialogOpen(true)
+    await loadMessages(ticket)
   }
 
   const sendMessage = async () => {
@@ -192,7 +203,12 @@ export default function AdminDashboardPage() {
         .eq('ticket_id', selectedTicket.ticket_id)
 
       setNewMessage('')
-      openTicket(selectedTicket) // Reload messages
+      
+      // Small delay to ensure message is committed to database
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
+      // Reload messages with explicit sorting
+      await loadMessages(selectedTicket)
       loadTickets() // Refresh ticket list
     } catch (err) {
       console.error('Error sending message:', err)
@@ -238,6 +254,7 @@ export default function AdminDashboardPage() {
         arbiter_id,
         created_at,
         accepted_at,
+        dispute_notes,
         outcome_notes,
         proposer:users!direct_bets_proposer_id_fkey(username),
         acceptor:users!direct_bets_acceptor_id_fkey(username),
@@ -266,6 +283,8 @@ export default function AdminDashboardPage() {
     try {
       // Re-establish auth context before RPC call
       await setAuthContext(currentUserId, true)
+      // Small delay to ensure auth context is set
+      await new Promise(resolve => setTimeout(resolve, 200))
       
       const { error } = await supabase.rpc('bet_resolve', {
         p_bet_id: selectedBet.bet_id,
@@ -428,10 +447,10 @@ export default function AdminDashboardPage() {
                             )}
                           </div>
                         </div>
-                        {bet.outcome_notes && (
-                          <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
-                            <p className="font-medium text-yellow-800">Dispute Notes:</p>
-                            <p className="text-gray-700">{bet.outcome_notes}</p>
+                        {bet.status === 'DISPUTED' && (bet.dispute_notes || bet.outcome_notes) && (
+                          <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded text-sm">
+                            <p className="font-medium text-red-800">⚠️ Dispute Notes:</p>
+                            <p className="text-gray-700">{bet.dispute_notes || bet.outcome_notes}</p>
                           </div>
                         )}
                         <p className="text-xs text-gray-500 mt-2">
@@ -466,9 +485,9 @@ export default function AdminDashboardPage() {
                 <div className="font-bold text-lg text-gray-800">
                   {selectedTicket?.subject}
                 </div>
-                <div className="text-sm text-gray-500 font-normal mt-1">
+                <DialogDescription className="text-sm text-gray-500 font-normal mt-1">
                   💬 Chat with @{selectedTicket?.user.username}
-                </div>
+                </DialogDescription>
               </div>
               {selectedTicket && (
                 <div className="flex gap-2">
@@ -563,6 +582,9 @@ export default function AdminDashboardPage() {
         <DialogContent className="max-w-2xl [&>button]:bg-gray-800 [&>button]:text-white [&>button]:hover:bg-gray-900">
           <DialogHeader>
             <DialogTitle>Resolve Bet (Admin Override)</DialogTitle>
+            <DialogDescription>
+              Resolve a bet as an admin, overriding the assigned arbiter.
+            </DialogDescription>
           </DialogHeader>
           
           {selectedBet && (

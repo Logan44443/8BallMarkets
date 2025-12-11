@@ -265,14 +265,23 @@ BEGIN
                     WHEN random() < 0.55 THEN 'PROPOSER_WIN' 
                     ELSE 'ACCEPTOR_WIN' END;
     
-    -- Create resolved bet for this user
+    -- Ensure acceptor_id is set for RESOLVED bet (safety check)
+    IF acceptor_id IS NULL THEN
+      -- Pick a different user as acceptor if somehow NULL
+      acceptor_id := user_ids[1 + floor(random() * array_length(user_ids, 1))::int];
+      WHILE acceptor_id = proposer_id LOOP
+        acceptor_id := user_ids[1 + floor(random() * array_length(user_ids, 1))::int];
+      END LOOP;
+    END IF;
+    
+    -- Create resolved bet for this user - MUST have acceptor_id
     INSERT INTO direct_bets (
       proposer_id, acceptor_id, arbiter_id, event_description, status, outcome,
       stake_proposer_cents, stake_acceptor_cents, currency_code, odds_format, payout_model,
       created_at, accepted_at, resolved_at, resolved_by
     ) VALUES (
       proposer_id, acceptor_id, arbiter_id,
-      bet_templates[1 + floor(random() * array_length(bet_templates, 1))::int] || ' (user history)',
+      bet_templates[1 + floor(random() * array_length(bet_templates, 1))::int] || ' #' || user_idx,
       'RESOLVED', outcome, stake_cents, stake_cents, 'USD', 'DECIMAL', 'EVENS',
       NOW() - (created_days_ago || ' days')::INTERVAL,
       NOW() - (accepted_days_ago || ' days')::INTERVAL,
@@ -352,7 +361,16 @@ BEGIN
     
     -- Distribute bets: 60% resolved, 20% active, 15% pending, 5% disputed
     IF i <= total_bets * 0.6 THEN
-      -- RESOLVED bets
+      -- RESOLVED bets - MUST have an acceptor
+      -- Ensure acceptor_id is set (should already be, but double-check)
+      IF acceptor_id IS NULL THEN
+        -- Pick a different user as acceptor if somehow NULL
+        acceptor_id := user_ids[1 + floor(random() * array_length(user_ids, 1))::int];
+        WHILE acceptor_id = proposer_id LOOP
+          acceptor_id := user_ids[1 + floor(random() * array_length(user_ids, 1))::int];
+        END LOOP;
+      END IF;
+      
       status := 'RESOLVED';
       accepted_days_ago := created_days_ago - floor(random() * 5)::int;
       resolved_days_ago := accepted_days_ago - floor(random() * 10)::int;
@@ -360,6 +378,7 @@ BEGIN
                       WHEN random() < 0.55 THEN 'PROPOSER_WIN' 
                       ELSE 'ACCEPTOR_WIN' END;
       
+      -- Ensure RESOLVED bets always have acceptor_id (safety check)
       INSERT INTO direct_bets (
         proposer_id, acceptor_id, arbiter_id, event_description, status, outcome,
         stake_proposer_cents, stake_acceptor_cents, currency_code, odds_format, payout_model,

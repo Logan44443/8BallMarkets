@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
 
 interface Bet {
   bet_id: number
@@ -27,6 +28,8 @@ interface Bet {
   proposer_id: number
   acceptor_id: number | null
   target_user_id: number | null
+  dispute_notes: string | null
+  outcome_notes: string | null
   proposer: { username: string }
   acceptor: { username: string } | null
 }
@@ -91,6 +94,8 @@ export default function MyBetsPage() {
           proposer_id,
           acceptor_id,
           target_user_id,
+          dispute_notes,
+          outcome_notes,
           proposer:users!direct_bets_proposer_id_fkey(username),
           acceptor:users!direct_bets_acceptor_id_fkey(username)
         `)
@@ -364,6 +369,17 @@ export default function MyBetsPage() {
 
     setSubmittingDispute(true)
     try {
+      const userData = localStorage.getItem('user')
+      if (!userData) {
+        router.push('/login')
+        return
+      }
+
+      const user = JSON.parse(userData)
+      await setAuthContext(user.id, user.is_admin || false)
+      // Small delay to ensure auth context is set
+      await new Promise(resolve => setTimeout(resolve, 200))
+
       const { error } = await supabase.rpc('bet_dispute', {
         p_bet_id: disputeBet.bet_id,
         p_notes: disputeNotes
@@ -616,6 +632,18 @@ export default function MyBetsPage() {
                           <td className="p-3">
                             <div className="max-w-xs">
                               <p className="font-medium">{bet.event_description}</p>
+                              {bet.status === 'DISPUTED' && bet.dispute_notes && (
+                                <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs">
+                                  <p className="font-semibold text-red-800 mb-1">⚠️ Dispute Notes:</p>
+                                  <p className="text-red-700">{bet.dispute_notes}</p>
+                                </div>
+                              )}
+                              {bet.status === 'RESOLVED' && bet.outcome_notes && (
+                                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                                  <p className="font-semibold text-blue-800 mb-1">📝 Resolution Notes:</p>
+                                  <p className="text-blue-700">{bet.outcome_notes}</p>
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="p-3">
@@ -809,6 +837,7 @@ export default function MyBetsPage() {
                     onChange={(e) => setDisputeNotes(e.target.value)}
                     rows={4}
                     required
+                    className="bg-white"
                   />
                   <p className="text-xs text-gray-500">
                     The arbiter will review your dispute and make a final decision
