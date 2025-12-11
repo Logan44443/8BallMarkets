@@ -141,3 +141,4 @@ END $$;
 COMMENT ON FUNCTION bet_dispute IS 'Dispute a bet - runs with elevated privileges. Stores notes in dispute_notes and includes authorization checks.';
 COMMENT ON FUNCTION bet_resolve IS 'Resolve a bet - runs with elevated privileges. Preserves dispute_notes and uses outcome_notes for resolution notes.';
 
+

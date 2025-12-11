@@ -5,7 +5,7 @@ Team Members: Logan Azizzadeh, Lukas Horvat, Dylan Cohen, Carlos Penzini, Alain 
 Github link: https://github.com/Logan44443/8BallMarkets 
 
 Final Project Video Link:
-https://drive.google.com/file/d/14ykCZBhYey18AX2grfYdl2-oK8yqqj1s/view?usp=sharing
+https://drive.google.com/file/d/1AUd089X6kNlGPR0_peIi35MAKEXLW7gG/view?usp=sharing
 
 
 Progress: Since Milestone 4, we focused on security, admin features, and creating a complete 
